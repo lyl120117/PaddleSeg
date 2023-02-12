@@ -90,8 +90,8 @@ class MobileSeg(nn.Layer):
         self.seg_heads = nn.LayerList()  # [..., head_16, head32]
 
         for in_ch, mid_ch in zip(arm_out_chs, seg_head_inter_chs):
-            self.seg_heads.append(SegHead(in_ch, mid_ch, num_classes))
-            # self.seg_heads.append(EucSegHead(in_ch, mid_ch, num_classes, 2.5))
+            # self.seg_heads.append(SegHead(in_ch, mid_ch, num_classes))
+            self.seg_heads.append(EucSegHead(in_ch, mid_ch, num_classes, 2.5))
 
         # pretrained
         self.pretrained = pretrained
@@ -111,8 +111,8 @@ class MobileSeg(nn.Layer):
         if self.training:
             logit_list = []
             for x, seg_head in zip(feats_head, self.seg_heads):
-                x = seg_head(x)
-                # x = seg_head(x, targets=targets)
+                # x = seg_head(x)
+                x = seg_head(x, targets=targets)
                 logit_list.append(x)
             logit_list = [
                 F.interpolate(x, x_hw, mode='bilinear', align_corners=False)
