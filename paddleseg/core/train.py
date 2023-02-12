@@ -120,11 +120,10 @@ def train(model,
         logger.info('use AMP to train. AMP level = {}'.format(amp_level))
         scaler = paddle.amp.GradScaler(init_loss_scaling=1024)
         if amp_level == 'O2':
-            model, optimizer = paddle.amp.decorate(
-                models=model,
-                optimizers=optimizer,
-                level='O2',
-                save_dtype='float32')
+            model, optimizer = paddle.amp.decorate(models=model,
+                                                   optimizers=optimizer,
+                                                   level='O2',
+                                                   save_dtype='float32')
 
     if nranks > 1:
         paddle.distributed.fleet.init(is_collective=True)
@@ -132,15 +131,18 @@ def train(model,
             optimizer)  # The return is Fleet object
         ddp_model = paddle.distributed.fleet.distributed_model(model)
 
-    batch_sampler = paddle.io.DistributedBatchSampler(
-        train_dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    batch_sampler = paddle.io.DistributedBatchSampler(train_dataset,
+                                                      batch_size=batch_size,
+                                                      shuffle=True,
+                                                      drop_last=True)
 
     loader = paddle.io.DataLoader(
         train_dataset,
         batch_sampler=batch_sampler,
         num_workers=num_workers,
         return_list=True,
-        worker_init_fn=worker_init_fn, )
+        worker_init_fn=worker_init_fn,
+    )
 
     if use_vdl:
         from visualdl import LogWriter
@@ -188,12 +190,11 @@ def train(model,
                         },
                         custom_black_list={'bilinear_interp_v2'}):
                     logits_list = ddp_model(images) if nranks > 1 else model(
-                        images)
-                    loss_list = loss_computation(
-                        logits_list=logits_list,
-                        labels=labels,
-                        edges=edges,
-                        losses=losses)
+                        images, targets=labels)
+                    loss_list = loss_computation(logits_list=logits_list,
+                                                 labels=labels,
+                                                 edges=edges,
+                                                 losses=losses)
                     loss = sum(loss_list)
 
                 scaled = scaler.scale(loss)  # scale the loss
@@ -203,12 +204,12 @@ def train(model,
                 else:
                     scaler.minimize(optimizer, scaled)  # update parameters
             else:
-                logits_list = ddp_model(images) if nranks > 1 else model(images)
-                loss_list = loss_computation(
-                    logits_list=logits_list,
-                    labels=labels,
-                    edges=edges,
-                    losses=losses)
+                logits_list = ddp_model(images) if nranks > 1 else model(
+                    images, targets=labels)
+                loss_list = loss_computation(logits_list=logits_list,
+                                             labels=labels,
+                                             edges=edges,
+                                             losses=losses)
                 loss = sum(loss_list)
                 loss.backward()
                 # if the optimizer is ReduceOnPlateau, the loss is the one which has been pass into step.
@@ -236,8 +237,8 @@ def train(model,
             else:
                 for i in range(len(loss_list)):
                     avg_loss_list[i] += loss_list[i].numpy()
-            batch_cost_averager.record(
-                time.time() - batch_start, num_samples=batch_size)
+            batch_cost_averager.record(time.time() - batch_start,
+                                       num_samples=batch_size)
 
             if (iter) % log_iters == 0 and local_rank == 0:
                 avg_loss /= log_iters
@@ -248,9 +249,9 @@ def train(model,
                 eta = calculate_eta(remain_iters, avg_train_batch_cost)
                 logger.info(
                     "[TRAIN] epoch: {}, iter: {}/{}, loss: {:.4f}, lr: {:.6f}, batch_cost: {:.4f}, reader_cost: {:.5f}, ips: {:.4f} samples/sec | ETA {}"
-                    .format((iter - 1
-                             ) // iters_per_epoch + 1, iter, iters, avg_loss,
-                            lr, avg_train_batch_cost, avg_train_reader_cost,
+                    .format((iter - 1) // iters_per_epoch + 1, iter, iters,
+                            avg_loss, lr, avg_train_batch_cost,
+                            avg_train_reader_cost,
                             batch_cost_averager.get_ips_average(), eta))
                 if use_vdl:
                     log_writer.add_scalar('Train/loss', avg_loss, iter)
@@ -273,20 +274,19 @@ def train(model,
                 reader_cost_averager.reset()
                 batch_cost_averager.reset()
 
-            if (iter % save_interval == 0 or
-                    iter == iters) and (val_dataset is not None):
+            if (iter % save_interval == 0 or iter == iters) and (val_dataset
+                                                                 is not None):
                 num_workers = 1 if num_workers > 0 else 0
 
                 if test_config is None:
                     test_config = {}
 
-                mean_iou, acc, _, _, _ = evaluate(
-                    model,
-                    val_dataset,
-                    num_workers=num_workers,
-                    precision=precision,
-                    amp_level=amp_level,
-                    **test_config)
+                mean_iou, acc, _, _, _ = evaluate(model,
+                                                  val_dataset,
+                                                  num_workers=num_workers,
+                                                  precision=precision,
+                                                  amp_level=amp_level,
+                                                  **test_config)
 
                 model.train()
 

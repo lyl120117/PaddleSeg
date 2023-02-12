@@ -43,7 +43,6 @@ class MobileSeg(nn.Layer):
         use_last_fuse (bool, optional): Whether use fusion in the last. Default: False.
         pretrained (str, optional): The path or url of pretrained model. Default: None.
     """
-
     def __init__(self,
                  num_classes,
                  backbone,
@@ -89,14 +88,16 @@ class MobileSeg(nn.Layer):
         assert len(seg_head_inter_chs) == len(backbone_indices), "The length of " \
             "seg_head_inter_chs and backbone_indices should be equal"
         self.seg_heads = nn.LayerList()  # [..., head_16, head32]
+
         for in_ch, mid_ch in zip(arm_out_chs, seg_head_inter_chs):
             self.seg_heads.append(SegHead(in_ch, mid_ch, num_classes))
+            # self.seg_heads.append(EucSegHead(in_ch, mid_ch, num_classes, 2.5))
 
         # pretrained
         self.pretrained = pretrained
         self.init_weight()
 
-    def forward(self, x):
+    def forward(self, x, targets=None):
         x_hw = paddle.shape(x)[2:]
 
         feats_backbone = self.backbone(x)  # [x4, x8, x16, x32]
@@ -111,10 +112,10 @@ class MobileSeg(nn.Layer):
             logit_list = []
             for x, seg_head in zip(feats_head, self.seg_heads):
                 x = seg_head(x)
+                # x = seg_head(x, targets=targets)
                 logit_list.append(x)
             logit_list = [
-                F.interpolate(
-                    x, x_hw, mode='bilinear', align_corners=False)
+                F.interpolate(x, x_hw, mode='bilinear', align_corners=False)
                 for x in logit_list
             ]
         else:
@@ -141,7 +142,6 @@ class MobileSegHead(nn.Layer):
         arm_type (str): The type of attention refinement module.
         resize_mode (str): The resize mode for the upsampling operation in decoder.
     """
-
     def __init__(self, backbone_out_chs, arm_out_chs, cm_bin_sizes, cm_out_ch,
                  arm_type, resize_mode, use_last_fuse):
         super().__init__()
@@ -159,25 +159,27 @@ class MobileSegHead(nn.Layer):
             high_ch = cm_out_ch if i == len(
                 backbone_out_chs) - 1 else arm_out_chs[i + 1]
             out_ch = arm_out_chs[i]
-            arm = arm_class(
-                low_chs, high_ch, out_ch, ksize=3, resize_mode=resize_mode)
+            arm = arm_class(low_chs,
+                            high_ch,
+                            out_ch,
+                            ksize=3,
+                            resize_mode=resize_mode)
             self.arm_list.append(arm)
 
         self.use_last_fuse = use_last_fuse
         if self.use_last_fuse:
             self.fuse_convs = nn.LayerList()
             for i in range(1, len(arm_out_chs)):
-                conv = layers.SeparableConvBNReLU(
-                    arm_out_chs[i],
-                    arm_out_chs[0],
-                    kernel_size=3,
-                    bias_attr=False)
+                conv = layers.SeparableConvBNReLU(arm_out_chs[i],
+                                                  arm_out_chs[0],
+                                                  kernel_size=3,
+                                                  bias_attr=False)
                 self.fuse_convs.append(conv)
-            self.last_conv = layers.SeparableConvBNReLU(
-                len(arm_out_chs) * arm_out_chs[0],
-                arm_out_chs[0],
-                kernel_size=3,
-                bias_attr=False)
+            self.last_conv = layers.SeparableConvBNReLU(len(arm_out_chs) *
+                                                        arm_out_chs[0],
+                                                        arm_out_chs[0],
+                                                        kernel_size=3,
+                                                        bias_attr=False)
 
     def forward(self, in_feat_list):
         """
@@ -202,11 +204,13 @@ class MobileSegHead(nn.Layer):
         if self.use_last_fuse:
             x_list = [out_feat_list[0]]
             size = paddle.shape(out_feat_list[0])[2:]
-            for i, (x, conv
-                    ) in enumerate(zip(out_feat_list[1:], self.fuse_convs)):
+            for i, (x,
+                    conv) in enumerate(zip(out_feat_list[1:], self.fuse_convs)):
                 x = conv(x)
-                x = F.interpolate(
-                    x, size=size, mode='bilinear', align_corners=False)
+                x = F.interpolate(x,
+                                  size=size,
+                                  mode='bilinear',
+                                  align_corners=False)
                 x_list.append(x)
             x = paddle.concat(x_list, axis=1)
             x = self.last_conv(x)
@@ -227,7 +231,6 @@ class MobileContextModule(nn.Layer):
         align_corners (bool): An argument of F.interpolate. It should be set to False
             when the output size of feature is even, e.g. 1024x512, otherwise it is True, e.g. 769x769.
     """
-
     def __init__(self,
                  in_channels,
                  inter_channels,
@@ -241,18 +244,18 @@ class MobileContextModule(nn.Layer):
             for size in bin_sizes
         ])
 
-        self.conv_out = layers.SeparableConvBNReLU(
-            in_channels=inter_channels,
-            out_channels=out_channels,
-            kernel_size=3,
-            bias_attr=False)
+        self.conv_out = layers.SeparableConvBNReLU(in_channels=inter_channels,
+                                                   out_channels=out_channels,
+                                                   kernel_size=3,
+                                                   bias_attr=False)
 
         self.align_corners = align_corners
 
     def _make_stage(self, in_channels, out_channels, size):
         prior = nn.AdaptiveAvgPool2D(output_size=size)
-        conv = layers.ConvBNReLU(
-            in_channels=in_channels, out_channels=out_channels, kernel_size=1)
+        conv = layers.ConvBNReLU(in_channels=in_channels,
+                                 out_channels=out_channels,
+                                 kernel_size=1)
         return nn.Sequential(prior, conv)
 
     def forward(self, input):
@@ -261,11 +264,10 @@ class MobileContextModule(nn.Layer):
 
         for stage in self.stages:
             x = stage(input)
-            x = F.interpolate(
-                x,
-                input_shape,
-                mode='bilinear',
-                align_corners=self.align_corners)
+            x = F.interpolate(x,
+                              input_shape,
+                              mode='bilinear',
+                              align_corners=self.align_corners)
             if out is None:
                 out = x
             else:
@@ -278,12 +280,69 @@ class MobileContextModule(nn.Layer):
 class SegHead(nn.Layer):
     def __init__(self, in_chan, mid_chan, n_classes):
         super().__init__()
-        self.conv = layers.SeparableConvBNReLU(
-            in_chan, mid_chan, kernel_size=3, bias_attr=False)
-        self.conv_out = nn.Conv2D(
-            mid_chan, n_classes, kernel_size=1, bias_attr=False)
+        self.conv = layers.SeparableConvBNReLU(in_chan,
+                                               mid_chan,
+                                               kernel_size=3,
+                                               bias_attr=False)
+        self.conv_out = nn.Conv2D(mid_chan,
+                                  n_classes,
+                                  kernel_size=1,
+                                  bias_attr=False)
 
     def forward(self, x):
         x = self.conv(x)
         x = self.conv_out(x)
         return x
+
+
+class EucSegHead(nn.Layer):
+    def __init__(self, in_chan, mid_chan, n_classes, m=2.5):
+        super().__init__()
+        self.conv = layers.SeparableConvBNReLU(in_chan,
+                                               mid_chan,
+                                               kernel_size=3,
+                                               bias_attr=False)
+
+        self.n_classes = n_classes
+        self.m = m
+
+        self.weight = self.create_parameter(
+            shape=[mid_chan, n_classes],
+            is_bias=False,
+            default_initializer=paddle.nn.initializer.XavierNormal())
+
+    def forward(self, x, targets=None):
+        inputs = self.conv(x)
+        b, c, h, w = inputs.shape
+
+        x = paddle.transpose(inputs, [0, 2, 3, 1])
+        x = paddle.reshape(x, [b * h * w, c])
+        norm_weight = paddle.norm(self.weight, p=2, axis=0, keepdim=True)
+        norm_x = paddle.norm(x, p=2, axis=1, keepdim=True)
+        logits = paddle.matmul(x, self.weight)
+        pow_x = paddle.pow(norm_x, 2)
+        pow_w = paddle.pow(norm_weight, 2)
+        output = pow_w + pow_x - 2 * logits
+
+        output = paddle.sqrt(output)
+
+        if self.training and self.m > 0:
+            with paddle.no_grad():
+                targets = paddle.unsqueeze(targets, axis=1).astype('float32')
+                targets = F.interpolate(targets,
+                                        inputs.shape[2:],
+                                        mode='bilinear').astype('int64')
+                targets = paddle.transpose(targets, [0, 2, 3, 1])
+                targets = paddle.reshape(targets, [-1])
+                one_hot = paddle.zeros_like(output)
+
+                one_hot[targets != 255] = paddle.scatter(
+                    one_hot[targets != 255], targets[targets != 255],
+                    paddle.ones((len(one_hot[targets != 255]), 1)))
+
+            output += paddle.multiply(one_hot, paddle.to_tensor(self.m))
+
+        output = -output
+        output = paddle.reshape(output, [b, h, w, -1])
+        output = paddle.transpose(output, [0, 3, 1, 2])
+        return output
